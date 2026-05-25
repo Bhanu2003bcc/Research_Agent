@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # FastAPI
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 7860
     log_level: str = "info"
 
 
