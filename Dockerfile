@@ -23,12 +23,7 @@ ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH
 
 # Pre-download models at build time so they're cached in the image
-# (Using python -c to trigger the download/cache)
-RUN python3 -c "\
-    from sentence_transformers import SentenceTransformer, CrossEncoder; \
-    SentenceTransformer('all-MiniLM-L6-v2'); \
-    CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); \
-    print('Models cached.')"
+RUN python3 -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('all-MiniLM-L6-v2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); print('Models cached.')"
 
 EXPOSE 8000
 
