@@ -1,3 +1,12 @@
+---
+title: Multi-Agent Research System
+emoji: 🔍
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # Multi-Agent Research System
 
 A **production-grade**, 10-stage multi-agent research pipeline that takes a natural language query and returns a high-quality, fact-grounded, self-refined answer with citations — powered by real-time web data.
