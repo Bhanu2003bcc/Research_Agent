@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: multi-agent-research
+    runtime: docker
+    region: oregon
+    plan: free
+    
+    # Health check
+    healthCheckPath: /health
+    healthCheckInterval: 30
+    
+    # Environment variables (add your API keys)
+    envVars:
+      - key: OPENAI_API_KEY
+        scope: build,runtime
+      - key: GROQ_API_KEY
+        scope: build,runtime
+      - key: EXA_API_KEY
+        scope: build,runtime
+      - key: LOG_LEVEL
+        value: info
+    
+    # Build settings
+    dockerfile: Dockerfile
+    dockerContext: ./
+    
+    # Port exposure
+    ports:
+      - port: 8000
+        protocol: http

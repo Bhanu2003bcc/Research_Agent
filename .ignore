@@ -1,8 +1,0 @@
-# .env, .env.example
-.env
-.env.example
-
-#redis password : CktWmY4qwFP8gpm1whQoTvfe5uknYPEZ
-#host: redis-19389.c301.ap-south-1-1.ec2.cloud.redislabs.com
-#secret : 64265eb083d1c042aee6bc6296f269055de423d7c6657ed6c5b941c9a9e0deba
-#postgresql : bC1NKcn48A5Icyjr

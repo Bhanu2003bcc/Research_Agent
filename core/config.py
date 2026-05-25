@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     # API Keys
-    exa_api_key: str = "6778d992-513b-42f0-8feb-f8d55a30dbaa"
+    exa_api_key: str = ""
     groq_api_key: str = ""
 
     # LLM Settings

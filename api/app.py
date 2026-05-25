@@ -5,10 +5,12 @@ FastAPI application – exposes the multi-agent pipeline as a REST API.
 from __future__ import annotations
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from core.config import get_settings
 from core.logging import get_logger, setup_logging
@@ -70,6 +72,21 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/", tags=["root"])
+async def root():
+    """Serve the frontend UI."""
+    frontend_path = Path(__file__).parent.parent / "frontend" / "index.html"
+    if frontend_path.exists():
+        return FileResponse(frontend_path, media_type="text/html")
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/favicon.ico", tags=["root"])
+async def favicon():
+    """Suppress favicon 404 errors."""
+    return JSONResponse(status_code=204, content={})
+
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"])
 async def health():
@@ -160,3 +177,25 @@ async def research(req: ResearchRequest):
         elapsed_seconds=elapsed,
         pipeline_errors=final_state.get("errors", []),
     )
+
+
+# ---------------------------------------------------------------------------
+# Frontend Static Files
+# ---------------------------------------------------------------------------
+
+@app.get("/styles.css", include_in_schema=False)
+async def get_styles():
+    """Serve frontend CSS."""
+    css_file = Path(__file__).parent.parent / "frontend" / "styles.css"
+    if css_file.exists():
+        return FileResponse(css_file, media_type="text/css")
+    return JSONResponse({"error": "Stylesheet not found"}, status_code=404)
+
+
+@app.get("/script.js", include_in_schema=False)
+async def get_script():
+    """Serve frontend JavaScript."""
+    js_file = Path(__file__).parent.parent / "frontend" / "script.js"
+    if js_file.exists():
+        return FileResponse(js_file, media_type="application/javascript")
+    return JSONResponse({"error": "Script not found"}, status_code=404)

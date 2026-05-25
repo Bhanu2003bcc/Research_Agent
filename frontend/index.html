@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Agent Research System</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">Research Agent</h1>
+                <p class="tagline">Intelligent research powered by multi-agent AI</p>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- Search Section -->
+            <section class="search-section">
+                <form id="searchForm" class="search-form">
+                    <div class="input-group">
+                        <input
+                            type="text"
+                            id="queryInput"
+                            class="search-input"
+                            placeholder="Enter your research query..."
+                            required
+                            autocomplete="off"
+                        >
+                        <button type="submit" class="search-button" id="searchBtn">
+                            <span class="button-text">Search</span>
+                            <span class="spinner hidden" id="spinner"></span>
+                        </button>
+                    </div>
+                    <div class="options-row">
+                        <label class="option-group">
+                            <span class="label-text">Search Results:</span>
+                            <input type="number" id="searchTopN" value="10" min="1" max="50" class="number-input">
+                        </label>
+                        <label class="option-group">
+                            <span class="label-text">Reranker Top K:</span>
+                            <input type="number" id="rerankerTopK" value="5" min="1" max="20" class="number-input">
+                        </label>
+                        <label class="option-group">
+                            <span class="label-text">Retriever Top K:</span>
+                            <input type="number" id="retrieverTopK" value="8" min="1" max="20" class="number-input">
+                        </label>
+                        <label class="option-group">
+                            <span class="label-text">Refinement Iterations:</span>
+                            <input type="number" id="refinementIterations" value="2" min="0" max="5" class="number-input">
+                        </label>
+                    </div>
+                </form>
+            </section>
+
+            <!-- Results Section -->
+            <section id="resultsSection" class="results-section hidden">
+                <!-- Answer -->
+                <div class="answer-card">
+                    <div class="card-header">
+                        <h2 class="card-title">Answer</h2>
+                        <div class="confidence-badge" id="confidenceBadge"></div>
+                    </div>
+                    <div class="card-body">
+                        <div id="answerContent" class="answer-text"></div>
+                    </div>
+                </div>
+
+                <!-- Quality Metrics -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">Factual Correctness</div>
+                        <div class="metric-value" id="factualScore">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill" id="factualBar"></div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Completeness</div>
+                        <div class="metric-value" id="completenessScore">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill" id="completenessBar"></div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Overall Quality</div>
+                        <div class="metric-value" id="qualityScore">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill" id="qualityBar"></div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Hallucination Risk</div>
+                        <div class="metric-value" id="hallucScore">--</div>
+                        <div class="metric-bar">
+                            <div class="metric-fill metric-fill-danger" id="hallucBar"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sources -->
+                <div class="sources-card">
+                    <div class="card-header">
+                        <h3 class="card-title">Sources</h3>
+                        <span class="source-count" id="sourceCount">0 sources</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="sourcesList" class="sources-list"></div>
+                    </div>
+                </div>
+
+                <!-- Critic Feedback -->
+                <div id="feedbackSection" class="feedback-card hidden">
+                    <div class="card-header">
+                        <h3 class="card-title">Improvement Suggestions</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="feedbackContent" class="feedback-content"></div>
+                    </div>
+                </div>
+
+                <!-- Metadata -->
+                <div class="metadata-card">
+                    <div class="metadata-row">
+                        <span class="metadata-label">Processing Time:</span>
+                        <span class="metadata-value" id="elapsedTime">--</span>
+                    </div>
+                    <div class="metadata-row">
+                        <span class="metadata-label">Refinement Iterations:</span>
+                        <span class="metadata-value" id="iterationsRun">--</span>
+                    </div>
+                    <div class="metadata-row" id="errorRow" class="hidden">
+                        <span class="metadata-label">Errors:</span>
+                        <span class="metadata-value error" id="errorsList">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Error Message -->
+            <section id="errorSection" class="error-section hidden">
+                <div class="error-card">
+                    <div class="error-header">
+                        <h3>Error</h3>
+                    </div>
+                    <p id="errorMessage"></p>
+                    <button class="button-secondary" onclick="location.reload()">Try Again</button>
+                </div>
+            </section>
+
+            <!-- Loading State -->
+            <section id="loadingSection" class="loading-section hidden">
+                <div class="loading-card">
+                    <div class="loading-spinner"></div>
+                    <p class="loading-text">Processing your research query...</p>
+                    <div class="loading-steps">
+                        <div class="step" id="step1"><span class="step-number">1</span> Searching web</div>
+                        <div class="step" id="step2"><span class="step-number">2</span> Re-ranking results</div>
+                        <div class="step" id="step3"><span class="step-number">3</span> Extracting content</div>
+                        <div class="step" id="step4"><span class="step-number">4</span> Generating answer</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p class="footer-text">Multi-Agent Research System powered by LangGraph, GPT-4o-mini, and Exa API</p>
+            <p class="footer-text secondary">API Documentation: <a href="/docs" target="_blank">Swagger UI</a></p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
