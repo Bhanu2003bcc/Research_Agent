@@ -44,6 +44,8 @@ Research Query
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+<img width="1055" height="1421" alt="diagram-export-4-26-2026-3_46_03-PM" src="https://github.com/user-attachments/assets/a25d4c66-5c93-4043-a20e-532c725c11bb" />
+
 ---
 
 ## Tech Stack
