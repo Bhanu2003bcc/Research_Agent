@@ -4,12 +4,14 @@ FastAPI application – exposes the multi-agent pipeline as a REST API.
 """
 from __future__ import annotations
 import time
+import json
+from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, FileResponse
+from fastapi.responses import JSONResponse, RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.config import get_settings
@@ -97,18 +99,6 @@ async def health():
 async def research(req: ResearchRequest):
     """
     Run the full multi-agent research pipeline for a given query.
-
-    The pipeline:
-    1. Search Agent   – Exa API real-time results
-    2. Re-Ranker      – Cross-encoder semantic scoring
-    3. Reader Agent   – BeautifulSoup async scraper
-    4. Chunker        – Token-bounded text splitting
-    5. Embedder       – sentence-transformers + FAISS indexing
-    6. Retriever      – FAISS nearest-neighbour search
-    7. Writer Agent   – LLM synthesis with citations
-    8. Critic Agent   – Structured quality evaluation
-    9. Refinement     – Iterative improvement loop
-    10. Final Output  – JSON with answer, sources, confidence
     """
     global _pipeline
     if _pipeline is None:
@@ -137,7 +127,6 @@ async def research(req: ResearchRequest):
     }
 
     # Override defaults from request if provided
-    # (Config override is done per-request via monkey-patching on settings)
     _orig_search_n = settings.search_top_n
     _orig_rerank_k = settings.reranker_top_k
     _orig_ret_k    = settings.retriever_top_k
@@ -168,15 +157,210 @@ async def research(req: ResearchRequest):
 
     elapsed = round(time.time() - t0, 2)
 
+    # Build source details with title and domain mapping
+    reranked = final_state.get("reranked_results", [])
+    retrieved = final_state.get("retrieved_chunks", [])
+    
+    url_to_title = {}
+    for r in reranked:
+        if r.url and r.title:
+            url_to_title[r.url] = r.title
+    for c in retrieved:
+        if c.source_url and c.source_title:
+            url_to_title[c.source_url] = c.source_title
+
+    source_details = []
+    for url in final_state.get("sources", []):
+        title = url_to_title.get(url, "")
+        if not title:
+            parsed = urlparse(url)
+            title = parsed.path.strip("/").split("/")[-1] or parsed.netloc
+            title = title.replace("-", " ").replace("_", " ").title()[:60] or "Source Link"
+        
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        source_details.append({
+            "url": url,
+            "title": title,
+            "domain": domain
+        })
+
     return ResearchResponse(
         answer=final_state.get("final_answer", ""),
         sources=final_state.get("sources", []),
+        source_details=source_details,
         confidence=final_state.get("confidence", 0.0),
         critic_feedback=final_state.get("critic_feedback"),
         refinement_iterations_run=final_state.get("refinement_iteration", 0),
         elapsed_seconds=elapsed,
         pipeline_errors=final_state.get("errors", []),
     )
+
+
+@app.post("/research/stream", tags=["research"])
+async def research_stream(req: ResearchRequest):
+    """
+    Stream events and updates during the research pipeline execution using SSE.
+    """
+    global _pipeline
+    if _pipeline is None:
+        raise HTTPException(503, "Pipeline not ready")
+
+    async def event_generator():
+        settings = get_settings()
+        t0 = time.time()
+        
+        # Override defaults
+        _orig_search_n = settings.search_top_n
+        _orig_rerank_k = settings.reranker_top_k
+        _orig_ret_k    = settings.retriever_top_k
+        _orig_ref_iter = settings.refinement_max_iterations
+
+        if req.search_top_n is not None:
+            settings.search_top_n = req.search_top_n
+        if req.reranker_top_k is not None:
+            settings.reranker_top_k = req.reranker_top_k
+        if req.retriever_top_k is not None:
+            settings.retriever_top_k = req.retriever_top_k
+        if req.refinement_iterations is not None:
+            settings.refinement_max_iterations = req.refinement_iterations
+
+        initial_state: dict = {
+            "query": req.query,
+            "search_results": [],
+            "reranked_results": [],
+            "scraped_pages": {},
+            "chunks": [],
+            "faiss_index_bytes": None,
+            "retrieved_chunks": [],
+            "draft_answer": "",
+            "critic_feedback": None,
+            "refinement_iteration": 0,
+            "final_answer": "",
+            "sources": [],
+            "confidence": 0.0,
+            "pipeline_start_ts": t0,
+            "errors": [],
+        }
+
+        try:
+            logger.info("pipeline_stream_invoke_start", query=req.query)
+            yield f"data: {json.dumps({'event': 'start', 'message': 'Initializing research pipeline...'})}\n\n"
+            
+            accumulated_state = dict(initial_state)
+
+            async for event in _pipeline.astream(initial_state):
+                for node_name, node_output in event.items():
+                    accumulated_state.update(node_output)
+                    
+                    message = ""
+                    details = {}
+                    
+                    if node_name == "search":
+                        count = len(node_output.get("search_results", []))
+                        message = f"Search Agent: Retrieved {count} real-time web results."
+                        details = {"count": count}
+                    elif node_name == "rerank":
+                        count = len(node_output.get("reranked_results", []))
+                        message = f"Re-Ranker: Screened and kept top {count} most relevant sources."
+                        details = {"count": count}
+                    elif node_name == "read":
+                        scraped = node_output.get("scraped_pages", {})
+                        count = sum(1 for text in scraped.values() if text.strip())
+                        message = f"Reader Agent: Successfully scraped {count} web pages."
+                        details = {"count": count}
+                    elif node_name == "chunk":
+                        count = len(node_output.get("chunks", []))
+                        message = f"Chunker: Partitioned content into {count} text blocks."
+                        details = {"count": count}
+                    elif node_name == "embed":
+                        message = "Embedder: Generated embeddings and built local FAISS index."
+                    elif node_name == "retrieve":
+                        count = len(node_output.get("retrieved_chunks", []))
+                        message = f"Retriever: Extracted top {count} relevant text segments."
+                        details = {"count": count}
+                    elif node_name == "write":
+                        iter_num = accumulated_state.get("refinement_iteration", 0)
+                        if iter_num > 0:
+                            message = f"Writer Agent (Iteration {iter_num}): Revising draft based on Critic feedback."
+                        else:
+                            message = "Writer Agent: Synthesizing initial draft answer."
+                    elif node_name == "critique":
+                        cf = node_output.get("critic_feedback")
+                        if cf:
+                            message = f"Critic Agent: Evaluated draft quality (Quality: {int(cf.overall_quality * 100)}%, Hallucination Risk: {int(cf.hallucination_risk * 100)}%)."
+                            details = {
+                                "factual_correctness": cf.factual_correctness_score,
+                                "completeness": cf.completeness_score,
+                                "hallucination_risk": cf.hallucination_risk,
+                                "overall_quality": cf.overall_quality,
+                                "missing_information": cf.missing_information,
+                                "improvement_suggestions": cf.improvement_suggestions
+                            }
+                        else:
+                            message = "Critic Agent: Evaluated draft."
+                    elif node_name == "increment_iter":
+                        iter_num = accumulated_state.get("refinement_iteration", 0)
+                        message = f"Pipeline: Initiating refinement iteration {iter_num}..."
+                    elif node_name == "finalise":
+                        message = "Finalizer: Formatting final answer and consolidating sources."
+
+                    yield f"data: {json.dumps({'event': 'progress', 'node': node_name, 'message': message, 'details': details})}\n\n"
+
+            elapsed = round(time.time() - t0, 2)
+            
+            # Build source details
+            reranked = accumulated_state.get("reranked_results", [])
+            retrieved = accumulated_state.get("retrieved_chunks", [])
+            
+            url_to_title = {}
+            for r in reranked:
+                if r.url and r.title:
+                    url_to_title[r.url] = r.title
+            for c in retrieved:
+                if c.source_url and c.source_title:
+                    url_to_title[c.source_url] = c.source_title
+
+            source_details = []
+            for url in accumulated_state.get("sources", []):
+                title = url_to_title.get(url, "")
+                if not title:
+                    parsed = urlparse(url)
+                    title = parsed.path.strip("/").split("/")[-1] or parsed.netloc
+                    title = title.replace("-", " ").replace("_", " ").title()[:60] or "Source Link"
+                
+                parsed = urlparse(url)
+                domain = parsed.netloc
+                source_details.append({
+                    "url": url,
+                    "title": title,
+                    "domain": domain
+                })
+
+            final_response = {
+                "answer": accumulated_state.get("final_answer", ""),
+                "sources": accumulated_state.get("sources", []),
+                "source_details": source_details,
+                "confidence": accumulated_state.get("confidence", 0.0),
+                "critic_feedback": accumulated_state.get("critic_feedback").model_dump() if accumulated_state.get("critic_feedback") else None,
+                "refinement_iterations_run": accumulated_state.get("refinement_iteration", 0),
+                "elapsed_seconds": elapsed,
+                "pipeline_errors": accumulated_state.get("errors", []),
+            }
+
+            yield f"data: {json.dumps({'event': 'result', 'data': final_response})}\n\n"
+            logger.info("pipeline_stream_invoke_done", query=req.query)
+
+        except Exception as exc:
+            logger.error("pipeline_stream_invoke_failed", error=str(exc))
+            yield f"data: {json.dumps({'event': 'error', 'message': f'Pipeline stream execution failed: {str(exc)}'})}\n\n"
+        finally:
+            settings.search_top_n        = _orig_search_n
+            settings.reranker_top_k      = _orig_rerank_k
+            settings.retriever_top_k     = _orig_ret_k
+            settings.refinement_max_iterations = _orig_ref_iter
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ---------------------------------------------------------------------------

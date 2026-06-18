@@ -114,9 +114,16 @@ class ResearchRequest(BaseModel):
     refinement_iterations: Optional[int] = Field(default=None, ge=0, le=3)
 
 
+class SourceDetail(BaseModel):
+    url: str
+    title: str
+    domain: str
+
+
 class ResearchResponse(BaseModel):
     answer: str
     sources: list[str]
+    source_details: list[SourceDetail] = []
     confidence: float
     critic_feedback: Optional[CriticFeedback] = None
     refinement_iterations_run: int = 0

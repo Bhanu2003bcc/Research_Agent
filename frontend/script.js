@@ -25,6 +25,8 @@ function initializeEventListeners() {
             handleSearch(e);
         }
     });
+    // Citation click handler for scroll and pulse effect
+    document.addEventListener('click', handleCitationClick);
 }
 
 /**
@@ -62,7 +64,7 @@ async function handleSearch(e) {
             refinement_iterations: refinementIterations,
         };
 
-        const response = await fetch(`${API_BASE_URL}/research`, {
+        const response = await fetch(`${API_BASE_URL}/research/stream`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -75,9 +77,44 @@ async function handleSearch(e) {
             throw new Error(errorData.detail || `HTTP ${response.status}`);
         }
 
-        const data = await response.json();
-        displayResults(data);
-        hideLoading();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalData = null;
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Hold onto incomplete line
+
+            for (const line of lines) {
+                const cleanLine = line.trim();
+                if (cleanLine.startsWith('data: ')) {
+                    const dataStr = cleanLine.slice(6);
+                    if (dataStr.trim()) {
+                        try {
+                            const parsedEvent = JSON.parse(dataStr);
+                            handleStreamEvent(parsedEvent);
+                            if (parsedEvent.event === 'result') {
+                                finalData = parsedEvent.data;
+                            }
+                        } catch (err) {
+                            console.error('SSE line parse error:', err);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (finalData) {
+            displayResults(finalData);
+            hideLoading();
+        } else {
+            throw new Error('Pipeline completed without returning final results.');
+        }
     } catch (error) {
         console.error('Search error:', error);
         showError(`Failed to process query: ${error.message}`);
@@ -96,7 +133,7 @@ function displayResults(data) {
 
     // Answer
     const answerContent = document.getElementById('answerContent');
-    answerContent.innerHTML = formatMarkdown(data.answer);
+    answerContent.innerHTML = formatMarkdown(data.answer, data.source_details);
 
     // Confidence badge
     const confidenceBadge = document.getElementById('confidenceBadge');
@@ -128,8 +165,8 @@ function displayResults(data) {
         criticFeedback.hallucination_risk
     );
 
-    // Sources
-    displaySources(data.sources || []);
+    // Sources (use structured source details if available)
+    displaySources(data.source_details || data.sources || []);
 
     // Feedback
     displayFeedback(criticFeedback);
@@ -178,17 +215,29 @@ function displaySources(sources) {
     sourcesList.innerHTML = '';
     sourceCount.textContent = `${sources.length} source${sources.length !== 1 ? 's' : ''}`;
 
-    sources.forEach((url, index) => {
+    sources.forEach((src, index) => {
         const item = document.createElement('div');
         item.className = 'source-item';
 
-        const domain = extractDomain(url);
+        let url = '';
+        let title = '';
+        let domain = '';
+
+        if (typeof src === 'string') {
+            url = src;
+            title = truncateUrl(url, 80);
+            domain = extractDomain(url);
+        } else {
+            url = src.url;
+            title = src.title || truncateUrl(url, 80);
+            domain = src.domain || extractDomain(url);
+        }
 
         item.innerHTML = `
             <div class="source-index">${index + 1}</div>
             <div class="source-url">
                 <a href="${url}" target="_blank" rel="noopener noreferrer" class="source-link">
-                    ${truncateUrl(url, 80)}
+                    ${title}
                 </a>
                 <span class="source-domain">${domain}</span>
             </div>
@@ -255,24 +304,14 @@ function showLoading() {
         document.getElementById(stepId).classList.remove('active');
     });
 
-    // Start animating steps
-    let currentStep = 0;
-    const stepInterval = setInterval(() => {
-        if (currentStep > 0) {
-            document.getElementById(STEPS[currentStep - 1]).classList.remove('active');
-        }
-        if (currentStep < STEPS.length) {
-            document.getElementById(STEPS[currentStep]).classList.add('active');
-            currentStep++;
-        } else {
-            clearInterval(stepInterval);
-        }
-    }, 1500);
+    // Clear console
+    const consoleBody = document.getElementById('consoleBody');
+    if (consoleBody) {
+        consoleBody.innerHTML = '<div class="console-line info">Connecting to agent swarm...</div>';
+    }
+    document.getElementById('consoleStatus').textContent = 'CONNECTING...';
 }
 
-/**
- * Hide loading state
- */
 function hideLoading() {
     loadingSection.classList.add('hidden');
 }
@@ -311,22 +350,191 @@ function scrollToResults() {
 /**
  * Format markdown-like content (basic implementation)
  */
-function formatMarkdown(text) {
+function formatMarkdown(text, sourceDetails) {
     if (!text) return '';
 
-    let html = text
-        // Bold
+    // Create lookup map of URLs for citations
+    const urlMap = {};
+    if (sourceDetails && sourceDetails.length > 0) {
+        sourceDetails.forEach((src, idx) => {
+            urlMap[src.url] = {
+                index: idx + 1,
+                title: src.title,
+                domain: src.domain
+            };
+        });
+    }
+
+    let html = text;
+
+    // 1. Replace [Source: URL] citations with elegant badges
+    const citationRegex = /\[Source:\s*(https?:\/\/[^\s\]>\"']+)(?:\s+.*?)*\]/g;
+    html = html.replace(citationRegex, (match, url) => {
+        const info = urlMap[url];
+        if (info) {
+            return `<a class="citation-badge" href="${url}" target="_blank" data-url="${url}" title="${info.title} (${info.domain})">[${info.index}]</a>`;
+        }
+        return `<a class="citation-badge" href="${url}" target="_blank" data-url="${url}" title="${url}">[Link]</a>`;
+    });
+
+    // 2. Standard markdown links [text](url)
+    html = html.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+    // 3. Headings
+    html = html
+        .replace(/^### (.*?)$/gm, '<h3>$1</h3>')
+        .replace(/^## (.*?)$/gm, '<h2>$1</h2>')
+        .replace(/^# (.*?)$/gm, '<h1>$1</h1>');
+
+    // 4. Bold and Italic
+    html = html
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/__(.*?)__/g, '<strong>$1</strong>')
-        // Italic
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        .replace(/_(.*?)_/g, '<em>$1</em>')
-        // Links
-        .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-        // Line breaks
-        .replace(/\n/g, '<br>');
+        .replace(/_(.*?)_/g, '<em>$1</em>');
+
+    // 5. Unordered list bullet items
+    html = html.replace(/^\s*[\*\-]\s+(.*?)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*?<\/li>)+/g, '<ul>$&</ul>');
+
+    // 6. Ordered list items
+    html = html.replace(/^\s*\d+\.\s+(.*?)$/gm, '<li class="ordered-list-item">$1</li>');
+    html = html.replace(/(<li class="ordered-list-item">.*?<\/li>)+/g, '<ol>$&</ol>');
+    html = html.replaceAll('class="ordered-list-item"', '');
+
+    // 7. Paragraph blocks (group lines by double-newlines)
+    const blocks = html.split(/\n{2,}/);
+    const parsedBlocks = blocks.map(block => {
+        const trimmed = block.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('<h') || trimmed.startsWith('<ul') || trimmed.startsWith('<ol') || trimmed.startsWith('<li')) {
+            return trimmed;
+        }
+        return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
+    });
+    html = parsedBlocks.join('\n');
 
     return html;
+}
+
+/**
+ * Handle real-time Server-Sent Events from research stream
+ */
+function handleStreamEvent(event) {
+    if (event.event === 'start') {
+        const consoleBody = document.getElementById('consoleBody');
+        if (consoleBody) consoleBody.innerHTML = '';
+        writeConsoleLog(event.message, 'info');
+        document.getElementById('consoleStatus').textContent = 'ACTIVE';
+    } else if (event.event === 'progress') {
+        writeConsoleLog(event.message, 'info');
+        updateLoaderStep(event.node);
+        
+        // Output specific critic details if critique is complete
+        if (event.node === 'critique' && event.details && event.details.overall_quality !== undefined) {
+            const d = event.details;
+            writeConsoleLog(`Critic Stats - Factual Quality: ${Math.round(d.factual_correctness*100)}% | Completeness: ${Math.round(d.completeness*100)}% | Hallucination Risk: ${Math.round(d.hallucination_risk*100)}%`, 'success');
+            
+            if (d.improvement_suggestions && d.improvement_suggestions.length > 0) {
+                d.improvement_suggestions.forEach(s => {
+                    writeConsoleLog(`Critic Suggestion: ${s}`, 'warn');
+                });
+            }
+        }
+    } else if (event.event === 'error') {
+        writeConsoleLog(event.message, 'error');
+        showError(event.message);
+        document.getElementById('consoleStatus').textContent = 'ERROR';
+    } else if (event.event === 'result') {
+        writeConsoleLog('Pipeline finished execution. Synthesis complete!', 'success');
+        document.getElementById('consoleStatus').textContent = 'DONE';
+    }
+}
+
+/**
+ * Update step loader visual states
+ */
+function updateLoaderStep(nodeName) {
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const step3 = document.getElementById('step3');
+    const step4 = document.getElementById('step4');
+    
+    if (!step1 || !step2 || !step3 || !step4) return;
+    
+    // Clear active
+    [step1, step2, step3, step4].forEach(el => el.classList.remove('active'));
+    
+    if (nodeName === 'search') {
+        step1.classList.add('active');
+    } else if (nodeName === 'rerank') {
+        step1.classList.add('active');
+        step2.classList.add('active');
+    } else if (nodeName === 'read' || nodeName === 'chunk' || nodeName === 'embed') {
+        step1.classList.add('active');
+        step2.classList.add('active');
+        step3.classList.add('active');
+    } else if (nodeName === 'retrieve' || nodeName === 'write' || nodeName === 'critique' || nodeName === 'finalise') {
+        step1.classList.add('active');
+        step2.classList.add('active');
+        step3.classList.add('active');
+        step4.classList.add('active');
+    }
+}
+
+/**
+ * Append message line to Live Agent Console
+ */
+function writeConsoleLog(message, type = 'info') {
+    const consoleBody = document.getElementById('consoleBody');
+    if (!consoleBody) return;
+    
+    const line = document.createElement('div');
+    line.className = `console-line ${type}`;
+    line.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+    consoleBody.appendChild(line);
+    
+    // Scroll wrapper to bottom
+    const consoleWrapper = consoleBody.parentElement;
+    if (consoleWrapper) {
+        consoleWrapper.scrollTop = consoleWrapper.scrollHeight;
+    }
+}
+
+/**
+ * Scroll and trigger pulse animation for clicked citation source card
+ */
+function handleCitationClick(e) {
+    const badge = e.target.closest('.citation-badge');
+    if (badge) {
+        e.preventDefault();
+        const url = badge.getAttribute('data-url');
+        if (url) {
+            const sourceItems = document.querySelectorAll('.source-item');
+            let targetItem = null;
+            sourceItems.forEach(item => {
+                const link = item.querySelector('.source-link');
+                if (link && link.href === url) {
+                    targetItem = item;
+                }
+            });
+            
+            if (targetItem) {
+                targetItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Reset any existing animations
+                targetItem.classList.remove('highlighted');
+                void targetItem.offsetWidth; // Force reflow
+                targetItem.classList.add('highlighted');
+                
+                // Clear highlighted class after a few seconds
+                setTimeout(() => {
+                    targetItem.classList.remove('highlighted');
+                }, 3000);
+            } else {
+                window.open(url, '_blank');
+            }
+        }
+    }
 }
 
 /**

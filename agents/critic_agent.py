@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 _CRITIC_SYSTEM = """\
 You are a rigorous academic fact-checker and research editor.
 Your job is to critically evaluate a draft research answer against
-the source material and return a JSON evaluation.
+the provided source material and return a JSON evaluation.
 
 OUTPUT FORMAT – return ONLY valid JSON, no prose before or after:
 {
@@ -30,13 +30,13 @@ OUTPUT FORMAT – return ONLY valid JSON, no prose before or after:
   "overall_quality": <float 0-1>
 }
 
-EVALUATION CRITERIA:
-- factual_correctness_score: Are all claims directly supported by sources?
+EVALUATION CRITERIA & HALLUCINATION POLICY:
+- factual_correctness_score: Check every claim in the draft answer. Are all claims directly supported by the provided sources? If not, penalize this score heavily.
 - completeness_score: Does the answer fully address all aspects of the query?
-- hallucination_risk: Does the answer state things NOT found in sources?
-- missing_information: Key facts from sources that should be in the answer.
-- improvement_suggestions: Concrete, actionable edits the writer should make.
-- overall_quality: Weighted aggregate of the above scores.
+- hallucination_risk: Identify any statement, metric, claim, or detail that is NOT explicitly mentioned in the source material. Even if a claim is likely true, if it is NOT in the source material, classify it as a hallucination (hallucination_risk > 0.0) and describe the unverified claim in the suggestions.
+- missing_information: List key facts from the source material that are relevant to the query but missing from the draft.
+- improvement_suggestions: List concrete edits to align the draft with the source material and remove any hallucinations.
+- overall_quality: Weighted aggregate of the above scores. For high-quality, factual answers, this should reflect high correctness and low hallucination risk.
 """
 
 
@@ -72,14 +72,23 @@ async def critic_agent_node(state: PipelineState) -> dict:
         return {"critic_feedback": None}
 
     retrieved_chunks = state.get("retrieved_chunks", [])
-    source_summary = "\n".join(
-        f"- [{c.source_title}]({c.source_url}): {c.text[:200]}…"
-        for c in retrieved_chunks[:10]
-    )
+    
+    # Build complete source text context so critic can fact-check the whole text
+    parts: list[str] = []
+    seen_urls: set[str] = set()
+    for chunk in retrieved_chunks:
+        url_tag = f"[Source: {chunk.source_url}]"
+        if chunk.source_url not in seen_urls:
+            seen_urls.add(chunk.source_url)
+            header = f"### {chunk.source_title}\n{url_tag}"
+        else:
+            header = url_tag
+        parts.append(f"{header}\n{chunk.text}\n")
+    source_summary = "\n---\n".join(parts)
 
     prompt = (
         f"RESEARCH QUERY:\n{state.get('query', '')}\n\n"
-        f"SOURCE MATERIAL SUMMARY:\n{source_summary}\n\n"
+        f"SOURCE MATERIAL:\n{source_summary}\n\n"
         f"DRAFT ANSWER TO EVALUATE:\n{draft_answer}\n\n"
         "Return your evaluation JSON now."
     )
@@ -88,7 +97,7 @@ async def critic_agent_node(state: PipelineState) -> dict:
 
     llm = ChatGroq(
         model=settings.llm_model,
-        temperature=0.1,
+        temperature=0.0,
         max_tokens=1024,
         groq_api_key=settings.groq_api_key,
     )

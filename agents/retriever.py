@@ -37,11 +37,15 @@ def _retrieve_sync(
     for dist, idx in zip(distances[0], indices[0]):
         if idx < 0:
             continue
+        score = float(dist)
+        if score < 0.3:
+            logger.info("retriever_skip_low_score", idx=idx, score=score)
+            continue
         chunk = chunks[idx]
         logger.debug(
             "retrieved_chunk",
             chunk_id=chunk.chunk_id,
-            score=float(dist),
+            score=score,
             url=chunk.source_url,
         )
         retrieved.append(chunk)

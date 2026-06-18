@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # LLM Settings
     llm_model: str = "llama-3.3-70b-versatile"
-    llm_temperature: float = 0.2
+    llm_temperature: float = 0.0
     llm_max_tokens: int = 2048
 
     # Search Agent
